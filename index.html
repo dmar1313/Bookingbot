@@ -1,0 +1,118 @@
+import tkinter as tk
+from tkinter import ttk
+import threading
+import openai
+import requests
+from datetime import datetime, timedelta
+from requests_oauthlib import OAuth2Session
+
+# GPT-3 API key
+openai.api_key = "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"
+
+# QuickBooks API credentials
+quickbooks_api_url = "https://quickbooks.api.intuit.com"
+client_id = "AB4aDMqSN88fAB1VTcp8sXGZhhMKENtsBaQ4GgUIsonpl83vYw"
+client_secret = "UFGi5QW4u2uwcuQggsv861EsGdbyz5oQgvfhQ1f6"
+company_id = "9130355118425206"
+
+# OAuth 2.0 settings
+authorization_base_url = "https://appcenter.intuit.com/connect/oauth2"
+token_url = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
+redirect_uri = "https://yourdomain.com/callback"
+
+# Categories
+categories = ["Rent", "Utilities", "Office Supplies", "Travel"]
+
+# Function to start OAuth 2.0 flow and obtain access token
+def get_quickbooks_access_token():
+    oauth = OAuth2Session(client_id, redirect_uri=redirect_uri, scope=["com.intuit.quickbooks.accounting"])
+    authorization_url, state = oauth.authorization_url(authorization_base_url)
+
+    print(f"Please go to the following URL to authorize the app: {authorization_url}")
+    authorization_response = input("Enter the full callback URL you received after authorization: ")
+
+    token = oauth.fetch_token(token_url, authorization_response=authorization_response, client_secret=client_secret)
+    access_token = token["access_token"]
+    return access_token
+
+# Function to categorize transactions using GPT-3
+def categorize_transaction(description, categories):
+    prompt = f"Please categorize the following transaction based on the given categories: {description}\n\nCategories: {', '.join(categories)}\n\nCategory:"
+
+    response = openai.Completion.create(
+    engine="davinci-codex",
+    prompt=prompt,
+    temperature=0.5,
+    max_tokens=100,
+    top_p=1,
+    frequency_penalty=0,
+    presence_penalty=0,
+)
+
+    category = response.choices[0].text.strip()
+    return category
+
+# Function to sync with QuickBooks
+def sync_with_quickbooks():
+    global access_token
+    if not access_token:
+        access_token = get_quickbooks_access_token()
+
+    query = "SELECT * FROM Transactions"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    response = requests.get(f"{quickbooks_api_url}/v3/company/{company_id}/query?query={query}", headers=headers)
+
+    if response.status_code != 200:
+        print(f"Error fetching transactions: {response.status_code} - {response.text}")
+        return
+
+    transactions = response.json()["QueryResponse"]["Transactions"]
+
+    transactions_listbox.delete(0, tk.END)
+    for transaction in transactions:
+        transactions_listbox.insert(tk.END, transaction["description"])
+
+# Function to sort transactions using GPT-3
+def sort_transactions():
+    for index in range(transactions_listbox.size()):
+        description = transactions_listbox.get(index)
+        category = categorize_transaction(description, categories)
+        categories_listbox.insert(tk.END, category)
+
+# Function to run sync_with_quickbooks in a separate thread
+def threaded_sync_with_quickbooks():
+    thread = threading.Thread(target=sync_with_quickbooks)
+    thread.start()
+
+# Create the main window
+root = tk.Tk()
+root.title("AI Transaction Categorization")
+
+# Create the UI layout
+frame = ttk.Frame(root, padding="10")
+frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+# Create Listboxes for transactions and categories
+transactions_listbox = tk.Listbox(frame, width=50, height=20)
+transactions_listbox.grid(row=0, column=0, padx=(0, 10))
+
+categories_listbox = tk.Listbox(frame, width=50, height=20)
+categories_listbox.grid(row=0, column=1)
+
+# Create buttons for syncing with QuickBooks and sorting transactions
+sync_button = ttk.Button(frame, text="Qsync", command=threaded_sync_with_quickbooks)
+sync_button.grid(row=1, column=0, pady=(10, 0))
+
+sort_button = ttk.Button(frame, text="Sort-It", command=sort_transactions)
+sort_button.grid(row=1, column=1, pady=(10, 0))
+
+# Initialize access_token
+access_token = None
+
+# Run the UI
+root.mainloop()
+
